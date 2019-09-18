@@ -612,13 +612,17 @@ local function create(knots)
 		assert(type(knots) == "table",
 			"invalid knots")
 		
+		local ks = {}
+
 		for k, p in pairs(knots) do
 			if type(k) == "number" then
 				k = p
-				p = nil
+				p = no_param
 			end
-			f:knot(k, p)
+			ks[k] = p
 		end
+
+		f.knots = ks
 	end
 	
 	return f
@@ -653,12 +657,6 @@ local function event_rec(sender, method, k, ...)
 	end
 end
 
-setmetatable(fila, {
-	__call = function(_, knots)
-		return create(knots)
-	end
-})
-
 local function add_child(self, f)
 	local children = self.children
 	if not children then
@@ -675,10 +673,20 @@ local function add_child(self, f)
 	event(f, "notify_create")
 end
 
+setmetatable(fila, {
+	__call = function(_, knots)
+		return create(knots)
+	end
+})
+
 function fila:__call(knots)
 	local f = create(knots)
 	add_child(self, f)
 	return f
+end
+
+function fila:__tostring()
+	return "[fila: "..self.hash.."]"
 end
 
 function fila:get_hash()
@@ -1269,6 +1277,20 @@ local function raw_fg(f, ks, hash)
 	
 	g.k_table = k_table
 	local es = g.entities
+
+	local listener = {}
+
+	function listener:notify_create(f)
+		for i = 1, #ks do
+			local k = ks[i]
+			if not f:find(k) then
+				return
+			end
+		end
+		grp_add(g, f)
+	end
+
+	f:add_listener(listener)
 	
 	local function on_knot(new_k, f)
 		for i = 1, #ks do
@@ -1312,6 +1334,8 @@ local function raw_fg(f, ks, hash)
 	function g:destroy()
 		group.destroy(g)
 
+		f:remove_listener(listener)
+
 		for i = 1, #ks do
 			local k = ks[i]
 			f:unlisten("knot", k, on_knot)
@@ -1334,7 +1358,7 @@ local function raw_fg(f, ks, hash)
 	return g
 end
 
-function sort(a)
+local function sort(a)
 	for i=1,#a do
 		local j = i
 		while j > 1 and a[j-1] > a[j] do
@@ -1344,26 +1368,27 @@ function sort(a)
 	end
 end
 
+local function create_hash(ks)
+	local t = {}
+	for i = 1, #ks do
+		if getmetatable(k) == fila then
+			t[#t+1] = tostr(k:get_hash())
+		else
+			t[#t+1] = tostr(k)
+		end
+	end
+	sort(t)
+	local h = ""
+	for i = 1, #t do
+		h = h..t[i]
+	end
+	return h
+end
+
 function fila:fast_group(...)
 	local knottees = {...}
 	assert(#knottees > 0,
 		"no knottee specified")
-		
-	local ft = {}
-	for i = 1, #knottees do
-		local k = knottees[i]
-		if getmetatable(k) == fila then
-			ft[#ft+1] = tostr(k:get_hash())
-		else
-			ft[#ft+1] = tostr(k)
-		end
-	end
-	sort(ft)
-	
-	local hash = ""
-	for i = 1, #ft do
-		hash = hash..ft[i]
-	end
 	
 	local fgs = self.fast_groups
 	if not fgs then
@@ -1371,6 +1396,7 @@ function fila:fast_group(...)
 		self.fast_groups = fgs
 	end
 	
+	local hash = create_hash(knottees)
 	local slot = fgs[hash]
 	if slot then
 		if not getmetatable(slot) then
@@ -1438,6 +1464,9 @@ function fila:reactive_group(...)
 	
 	g:on_add_iter(function(g, f)
 		self:on(f, "reknot", on_reknot)
+		for c in pairs(react_cbs) do
+			c(g, f)
+		end
 	end)
 	
 	g:on_remove(function(g, f)
